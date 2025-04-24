@@ -7,6 +7,7 @@ import os
 from pydantic import BaseModel
 from typing import List
 import json
+import re
 
 load_dotenv()
 
@@ -58,17 +59,21 @@ async def extract_text(file: UploadFile = File(...)):
 async def generate_questions(request: QuestionRequest):
     try:
         print(f"Received request: {request}")
-        num_questions = max(1, min(request.num_questions, 150))  # Updated to 150
+        num_questions = max(1, min(request.num_questions, 150))
         if request.question_type == "multiple_choice":
             prompt = (
-                f"Generate {num_questions} multiple-choice questions based on the following content:\n\n{request.text}\n\n"
-                f"Provide 4 answer options per question, with the correct answer marked with **, e.g., c) **Correct Option**."
+                f"Generate exactly {num_questions} multiple-choice questions based on the following content:\n\n{request.text}\n\n"
+                f"Provide 4 answer options per question, with the correct answer marked with **, e.g., c) **Correct Option**. "
+                f"Ensure each question is numbered (e.g., Q1, Q2) and formatted clearly. "
+                f"If the content is insufficient, generate as many relevant questions as possible up to {num_questions}."
             )
         else:  # theoretical
             prompt = (
-                f"Generate {num_questions} open-ended theoretical questions based on the following content:\n\n{request.text}\n\n"
+                f"Generate exactly {num_questions} open-ended theoretical questions based on the following content:\n\n{request.text}\n\n"
                 f"For each question, provide a sample answer prefixed with 'Sample Answer:'. "
-                f"Format each question as: '**Q#: Question text**' and the sample answer as '**Sample Answer: Answer text**'."
+                f"Format each question as: '**Q#: Question text**' and the sample answer as '**Sample Answer: Answer text**'. "
+                f"Ensure each question is numbered (e.g., Q1, Q2). "
+                f"If the content is insufficient, generate as many relevant questions as possible up to {num_questions}."
             )
         headers = {
             "Content-Type": "application/json",
@@ -77,7 +82,7 @@ async def generate_questions(request: QuestionRequest):
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.7,
-                "maxOutputTokens": 3000  # Increased to handle more questions
+                "maxOutputTokens": 5000  # Increased for larger responses
             }
         }
         response = requests.post(GEMINI_API_URL, json=data, headers=headers)
@@ -85,6 +90,17 @@ async def generate_questions(request: QuestionRequest):
         result = response.json()
         questions = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
         print(f"Gemini response: {questions}")
+        
+        # Count generated questions
+        if request.question_type == "multiple_choice":
+            question_count = len(re.findall(r'Q\d+', questions))
+        else:
+            question_count = len(re.findall(r'\*\*Q\d+:', questions))
+        print(f"Generated {question_count} questions out of {num_questions} requested")
+        
+        if question_count < num_questions:
+            print(f"Warning: Generated fewer questions ({question_count}) than requested ({num_questions})")
+        
         return {"questions": questions}
     except Exception as e:
         print(f"Error in generate_questions: {str(e)}")
@@ -129,7 +145,7 @@ async def grade_answer(request: GradeRequest):
                 response.raise_for_status()
                 result = response.json()
                 grading_text = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
-                print(f"Raw Gemini grading response: ${grading_text}")
+                print(f"Raw Gemini grading response: {grading_text}")
                 try:
                     if grading_text.startswith('```json'):
                         grading_text = grading_text.split('```json\n')[1].split('\n```')[0]
@@ -137,9 +153,9 @@ async def grade_answer(request: GradeRequest):
                     partial_score = min(max(float(grading_data.get("partial_score", 0)), 0), 100) / 100.0
                     feedback = grading_data.get("feedback", "No feedback provided")
                 except (json.JSONDecodeError, IndexError, ValueError) as e:
-                    print(f"JSON decode error: ${str(e)} for response: ${grading_text}")
+                    print(f"JSON decode error: {str(e)} for response: {grading_text}")
                     partial_score = 0.0
-                    feedback = f"Unable to evaluate answer: ${grading_text}"
+                    feedback = f"Unable to evaluate answer: {grading_text}"
                 score += partial_score
                 results.append({
                     "question": answer.question,
@@ -165,5 +181,5 @@ async def grade_answer(request: GradeRequest):
             "feedback": feedback
         }
     except Exception as e:
-        print(f"Error in grade_answer: ${str(e)}")
+        print(f"Error in grade_answer: {str(e)}")
         return {"error": str(e)}
