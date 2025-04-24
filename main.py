@@ -59,12 +59,12 @@ async def extract_text(file: UploadFile = File(...)):
 async def generate_questions(request: QuestionRequest):
     try:
         print(f"Received request: {request}")
-        num_questions = max(1, min(request.num_questions, 150))
+        num_questions = max(1, min(request.num_questions, 75))  # Updated to 75
         if request.question_type == "multiple_choice":
             prompt = (
                 f"Generate exactly {num_questions} multiple-choice questions based on the following content:\n\n{request.text}\n\n"
                 f"Provide 4 answer options per question, with the correct answer marked with **, e.g., c) **Correct Option**. "
-                f"Ensure each question is numbered (e.g., Q1, Q2) and formatted clearly. "
+                f"Ensure each question is numbered (e.g., Q1, Q2) and formatted clearly with a period after the question number (e.g., Q1.). "
                 f"If the content is insufficient, generate as many relevant questions as possible up to {num_questions}."
             )
         else:  # theoretical
@@ -82,20 +82,22 @@ async def generate_questions(request: QuestionRequest):
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.7,
-                "maxOutputTokens": 5000  # Increased for larger responses
+                "maxOutputTokens": 4000  # Adjusted for 75 questions
             }
         }
         response = requests.post(GEMINI_API_URL, json=data, headers=headers)
         response.raise_for_status()
         result = response.json()
         questions = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-        print(f"Gemini response: {questions}")
+        print(f"Gemini response length: ${len(questions)} characters")
         
         # Count generated questions
         if request.question_type == "multiple_choice":
-            question_count = len(re.findall(r'Q\d+', questions))
+            question_matches = re.findall(r'Q\d+\.\s+', questions)
+            question_count = len(question_matches)
         else:
-            question_count = len(re.findall(r'\*\*Q\d+:', questions))
+            question_matches = re.findall(r'\*\*Q\d+:', questions)
+            question_count = len(question_matches)
         print(f"Generated {question_count} questions out of {num_questions} requested")
         
         if question_count < num_questions:
