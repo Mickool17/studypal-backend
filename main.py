@@ -39,6 +39,10 @@ class AnswerRequest(BaseModel):
 class GradeRequest(BaseModel):
     answers: List[AnswerRequest]
 
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the AI Study Companion Backend"}
+
 @app.post("/extract-text")
 async def extract_text(file: UploadFile = File(...)):
     try:
