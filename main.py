@@ -58,7 +58,7 @@ async def extract_text(file: UploadFile = File(...)):
 async def generate_questions(request: QuestionRequest):
     try:
         print(f"Received request: {request}")
-        num_questions = max(1, min(request.num_questions, 20))
+        num_questions = max(1, min(request.num_questions, 150))  # Updated to 150
         if request.question_type == "multiple_choice":
             prompt = (
                 f"Generate {num_questions} multiple-choice questions based on the following content:\n\n{request.text}\n\n"
@@ -77,7 +77,7 @@ async def generate_questions(request: QuestionRequest):
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.7,
-                "maxOutputTokens": 1000
+                "maxOutputTokens": 3000  # Increased to handle more questions
             }
         }
         response = requests.post(GEMINI_API_URL, json=data, headers=headers)
@@ -129,7 +129,7 @@ async def grade_answer(request: GradeRequest):
                 response.raise_for_status()
                 result = response.json()
                 grading_text = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
-                print(f"Raw Gemini grading response: {grading_text}")
+                print(f"Raw Gemini grading response: ${grading_text}")
                 try:
                     if grading_text.startswith('```json'):
                         grading_text = grading_text.split('```json\n')[1].split('\n```')[0]
@@ -137,9 +137,9 @@ async def grade_answer(request: GradeRequest):
                     partial_score = min(max(float(grading_data.get("partial_score", 0)), 0), 100) / 100.0
                     feedback = grading_data.get("feedback", "No feedback provided")
                 except (json.JSONDecodeError, IndexError, ValueError) as e:
-                    print(f"JSON decode error: {str(e)} for response: {grading_text}")
+                    print(f"JSON decode error: ${str(e)} for response: ${grading_text}")
                     partial_score = 0.0
-                    feedback = f"Unable to evaluate answer: {grading_text}"
+                    feedback = f"Unable to evaluate answer: ${grading_text}"
                 score += partial_score
                 results.append({
                     "question": answer.question,
@@ -165,5 +165,5 @@ async def grade_answer(request: GradeRequest):
             "feedback": feedback
         }
     except Exception as e:
-        print(f"Error in grade_answer: {str(e)}")
+        print(f"Error in grade_answer: ${str(e)}")
         return {"error": str(e)}
