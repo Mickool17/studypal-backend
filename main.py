@@ -59,7 +59,7 @@ async def extract_text(file: UploadFile = File(...)):
 async def generate_questions(request: QuestionRequest):
     try:
         print(f"Received request: {request}")
-        num_questions = max(1, min(request.num_questions, 75))  # Updated to 75
+        num_questions = max(1, min(request.num_questions, 75))
         if request.question_type == "multiple_choice":
             prompt = (
                 f"Generate exactly {num_questions} multiple-choice questions based on the following content:\n\n{request.text}\n\n"
@@ -82,16 +82,15 @@ async def generate_questions(request: QuestionRequest):
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.7,
-                "maxOutputTokens": 4000  # Adjusted for 75 questions
+                "maxOutputTokens": 4000
             }
         }
         response = requests.post(GEMINI_API_URL, json=data, headers=headers)
         response.raise_for_status()
         result = response.json()
         questions = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-        print(f"Gemini response length: ${len(questions)} characters")
+        print(f"Gemini response length: {len(questions)} characters")
         
-        # Count generated questions
         if request.question_type == "multiple_choice":
             question_matches = re.findall(r'Q\d+\.\s+', questions)
             question_count = len(question_matches)
@@ -114,20 +113,16 @@ async def grade_answer(request: GradeRequest):
         results = []
         score = 0.0
         total = len(request.answers)
+        print(f"Grading {total} answers")
 
-        for answer in request.answers:
+        for i, answer in enumerate(request.answers):
+            print(f"Processing answer {i+1}: {answer.question}")
+            partial_score = 0.0
+            feedback = ""
             if answer.question_type == "multiple_choice":
                 is_correct = answer.user_answer.strip() == answer.correct_answer.strip()
                 partial_score = 1.0 if is_correct else 0.0
-                score += partial_score
-                results.append({
-                    "question": answer.question,
-                    "user_answer": answer.user_answer,
-                    "correct_answer": answer.correct_answer,
-                    "partial_score": partial_score,
-                    "feedback": "Correct answer!" if is_correct else "Incorrect, please review the material.",
-                    "question_type": answer.question_type,
-                })
+                feedback = "Correct answer!" if is_correct else "Incorrect, please review the material."
             else:  # theoretical
                 prompt = (
                     f"Evaluate the following user answer for correctness based on this question and expected answer. "
@@ -155,18 +150,20 @@ async def grade_answer(request: GradeRequest):
                     partial_score = min(max(float(grading_data.get("partial_score", 0)), 0), 100) / 100.0
                     feedback = grading_data.get("feedback", "No feedback provided")
                 except (json.JSONDecodeError, IndexError, ValueError) as e:
-                    print(f"JSON decode error: {str(e)} for response: {grading_text}")
+                    print(f"JSON decode error for answer {i+1}: {str(e)} for response: {grading_text}")
                     partial_score = 0.0
                     feedback = f"Unable to evaluate answer: {grading_text}"
-                score += partial_score
-                results.append({
-                    "question": answer.question,
-                    "user_answer": answer.user_answer,
-                    "correct_answer": answer.correct_answer,
-                    "partial_score": partial_score,
-                    "feedback": feedback,
-                    "question_type": answer.question_type,
-                })
+            
+            score += partial_score
+            results.append({
+                "question": answer.question,
+                "user_answer": answer.user_answer,
+                "correct_answer": answer.correct_answer,
+                "partial_score": partial_score,
+                "feedback": feedback,
+                "question_type": answer.question_type,
+            })
+            print(f"Answer {i+1} partial score: {partial_score}, running score: {score}")
 
         feedback = f"You scored {score:.1f} out of {total}."
         if score >= total * 0.9:
@@ -175,7 +172,8 @@ async def grade_answer(request: GradeRequest):
             feedback += " Good effort, keep practicing!"
         else:
             feedback += " Review the material and try again."
-
+        
+        print(f"Final score: {score}/{total}")
         return {
             "score": score,
             "total": total,
