@@ -72,7 +72,7 @@ async def generate_questions(request: QuestionRequest):
                 f"Generate exactly {num_questions} open-ended theoretical questions based on the following content:\n\n{request.text}\n\n"
                 f"For each question, provide a sample answer prefixed with 'Sample Answer:'. "
                 f"Format each question as: '**Q#: Question text**' and the sample answer as '**Sample Answer: Answer text**'. "
-                f"Ensure each question is numbered (e.g., Q1, Q2). "
+                f"Ensure each question is numbered (e.g., Q1, Q2) and avoid adding extra quotation marks or artifacts."
                 f"If the content is insufficient, generate as many relevant questions as possible up to {num_questions}."
             )
         headers = {
@@ -91,18 +91,40 @@ async def generate_questions(request: QuestionRequest):
         questions = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
         print(f"Gemini response length: {len(questions)} characters")
         
+        # Parse and sanitize questions
+        parsed_questions = []
         if request.question_type == "multiple_choice":
-            question_matches = re.findall(r'Q\d+\.\s+', questions)
-            question_count = len(question_matches)
-        else:
-            question_matches = re.findall(r'\*\*Q\d+:', questions)
-            question_count = len(question_matches)
+            question_matches = re.findall(r'(Q\d+\.\s+.*?)(?=Q\d+\.|$)', questions, re.DOTALL)
+            for q in question_matches:
+                lines = q.strip().split('\n')
+                question_text = lines[0].replace('Q', '', 1).lstrip('0123456789. ').replace('""', '').strip()
+                options = [line.strip().replace('**', '') for line in lines[1:5] if line.strip()]
+                correct_option = next((opt for opt in options if '**' in opt), options[0])
+                parsed_questions.append({
+                    'text': question_text,
+                    'type': 'multiple_choice',
+                    'options': options,
+                    'correct_answer': correct_option.replace('**', '').strip()
+                })
+        else:  # theoretical
+            question_matches = re.findall(r'\*\*Q\d+:.*?\*\*\n.*?\n\*\*Sample Answer:.*?(?=\*\*Q\d+:|$)', questions, re.DOTALL)
+            for q in question_matches:
+                lines = q.strip().split('\n')
+                question_text = lines[0].replace('**Q', '').lstrip('0123456789: ').replace('**', '').replace('""', '').strip()
+                sample_answer = lines[2].replace('**Sample Answer:', '').replace('""', '').strip()
+                parsed_questions.append({
+                    'text': question_text,
+                    'type': 'theoretical',
+                    'correct_answer': sample_answer
+                })
+
+        question_count = len(parsed_questions)
         print(f"Generated {question_count} questions out of {num_questions} requested")
         
         if question_count < num_questions:
             print(f"Warning: Generated fewer questions ({question_count}) than requested ({num_questions})")
         
-        return {"questions": questions}
+        return {"questions": parsed_questions}
     except Exception as e:
         print(f"Error in generate_questions: {str(e)}")
         return {"error": str(e)}
@@ -124,35 +146,40 @@ async def grade_answer(request: GradeRequest):
                 partial_score = 1.0 if is_correct else 0.0
                 feedback = "Correct answer!" if is_correct else "Incorrect, please review the material."
             else:  # theoretical
-                prompt = (
-                    f"Evaluate the following user answer for correctness based on this question and expected answer. "
-                    f"Return a JSON object wrapped in triple backticks (```json\n{{'partial_score': number, 'feedback': 'string'}}```\n), "
-                    f"where 'partial_score' is a percentage (0 to 100) reflecting the answer's quality (e.g., completeness, accuracy), "
-                    f"and 'feedback' explains the score, including what was correct and what was missing.\n"
-                    f"Question: {answer.question}\n"
-                    f"Expected Answer: {answer.correct_answer}\n"
-                    f"User Answer: {answer.user_answer}"
-                )
-                headers = {"Content-Type": "application/json"}
-                data = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"temperature": 0.7, "maxOutputTokens": 500}
-                }
-                response = requests.post(GEMINI_API_URL, json=data, headers=headers)
-                response.raise_for_status()
-                result = response.json()
-                grading_text = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
-                print(f"Raw Gemini grading response: {grading_text}")
-                try:
-                    if grading_text.startswith('```json'):
-                        grading_text = grading_text.split('```json\n')[1].split('\n```')[0]
-                    grading_data = json.loads(grading_text)
-                    partial_score = min(max(float(grading_data.get("partial_score", 0)), 0), 100) / 100.0
-                    feedback = grading_data.get("feedback", "No feedback provided")
-                except (json.JSONDecodeError, IndexError, ValueError) as e:
-                    print(f"JSON decode error for answer {i+1}: {str(e)} for response: {grading_text}")
+                if not answer.user_answer.strip():  # Handle empty answers
                     partial_score = 0.0
-                    feedback = f"Unable to evaluate answer: {grading_text}"
+                    feedback = "No answer provided."
+                    is_correct = False
+                else:
+                    prompt = (
+                        f"Evaluate the following user answer for correctness based on this question and expected answer. "
+                        f"Return a JSON object wrapped in triple backticks (```json\n{{'partial_score': number, 'feedback': 'string'}}```\n), "
+                        f"where 'partial_score' is a percentage (0 to 100) reflecting the answer's quality (e.g., completeness, accuracy), "
+                        f"and 'feedback' explains the score, including what was correct and what was missing.\n"
+                        f"Question: {answer.question}\n"
+                        f"Expected Answer: {answer.correct_answer}\n"
+                        f"User Answer: {answer.user_answer}"
+                    )
+                    headers = {"Content-Type": "application/json"}
+                    data = {
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 500}
+                    }
+                    response = requests.post(GEMINI_API_URL, json=data, headers=headers)
+                    response.raise_for_status()
+                    result = response.json()
+                    grading_text = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
+                    print(f"Raw Gemini grading response: {grading_text}")
+                    try:
+                        if grading_text.startswith('```json'):
+                            grading_text = grading_text.split('```json\n')[1].split('\n```')[0]
+                        grading_data = json.loads(grading_text)
+                        partial_score = min(max(float(grading_data.get("partial_score", 0)), 0), 100) / 100.0
+                        feedback = grading_data.get("feedback", "No feedback provided")
+                    except (json.JSONDecodeError, IndexError, ValueError) as e:
+                        print(f"JSON decode error for answer {i+1}: {str(e)} for response: {grading_text}")
+                        partial_score = 0.0
+                        feedback = f"Unable to evaluate answer: {grading_text}"
             
             score += partial_score
             results.append({
