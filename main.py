@@ -65,15 +65,15 @@ async def generate_questions(request: QuestionRequest):
                 f"Generate exactly {num_questions} multiple-choice questions based on the following content:\n\n{request.text}\n\n"
                 f"Provide 4 answer options per question, with the correct answer marked with **, e.g., c) **Correct Option**. "
                 f"Ensure each question is numbered (e.g., Q1, Q2) and formatted clearly with a period after the question number (e.g., Q1.). "
-                f"If the content is insufficient, generate as many relevant questions as possible up to {num_questions}."
+                f"If the content is insufficient, generate relevant questions based on the topic to reach exactly {num_questions} questions."
             )
         else:  # theoretical
             prompt = (
                 f"Generate exactly {num_questions} open-ended theoretical questions based on the following content:\n\n{request.text}\n\n"
                 f"For each question, provide a sample answer prefixed with 'Sample Answer:'. "
                 f"Format each question as: '**Q#: Question text**' and the sample answer as '**Sample Answer: Answer text**'. "
-                f"Ensure each question is numbered (e.g., Q1, Q2) and avoid adding extra quotation marks or artifacts."
-                f"If the content is insufficient, generate as many relevant questions as possible up to {num_questions}."
+                f"Ensure each question is numbered (e.g., Q1, Q2). "
+                f"If the content is insufficient, generate relevant questions based on the topic to reach exactly {num_questions} questions."
             )
         headers = {
             "Content-Type": "application/json",
@@ -82,19 +82,22 @@ async def generate_questions(request: QuestionRequest):
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.7,
-                "maxOutputTokens": 4000
+                "maxOutputTokens": 8000  # Increased to allow more questions
             }
         }
         response = requests.post(GEMINI_API_URL, json=data, headers=headers)
         response.raise_for_status()
         result = response.json()
         questions = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-        print(f"Gemini response length: {len(questions)} characters")
-        
-        # Parse and sanitize questions
+        print(f"Gemini raw response length: {len(questions)} characters")
+        print(f"Gemini raw response: {questions[:500]}...")  # Log first 500 chars
+
+        # Parse questions
         parsed_questions = []
         if request.question_type == "multiple_choice":
             question_matches = re.findall(r'(Q\d+\.\s+.*?)(?=Q\d+\.|$)', questions, re.DOTALL)
+            question_count = len(question_matches)
+            print(f"Parsed {question_count} multiple-choice questions")
             for q in question_matches:
                 lines = q.strip().split('\n')
                 question_text = lines[0].replace('Q', '', 1).lstrip('0123456789. ').replace('""', '').strip()
@@ -108,6 +111,8 @@ async def generate_questions(request: QuestionRequest):
                 })
         else:  # theoretical
             question_matches = re.findall(r'\*\*Q\d+:.*?\*\*\n.*?\n\*\*Sample Answer:.*?(?=\*\*Q\d+:|$)', questions, re.DOTALL)
+            question_count = len(question_matches)
+            print(f"Parsed {question_count} theoretical questions")
             for q in question_matches:
                 lines = q.strip().split('\n')
                 question_text = lines[0].replace('**Q', '').lstrip('0123456789: ').replace('**', '').replace('""', '').strip()
@@ -118,12 +123,10 @@ async def generate_questions(request: QuestionRequest):
                     'correct_answer': sample_answer
                 })
 
-        question_count = len(parsed_questions)
         print(f"Generated {question_count} questions out of {num_questions} requested")
-        
         if question_count < num_questions:
             print(f"Warning: Generated fewer questions ({question_count}) than requested ({num_questions})")
-        
+
         return {"questions": parsed_questions}
     except Exception as e:
         print(f"Error in generate_questions: {str(e)}")
@@ -146,7 +149,7 @@ async def grade_answer(request: GradeRequest):
                 partial_score = 1.0 if is_correct else 0.0
                 feedback = "Correct answer!" if is_correct else "Incorrect, please review the material."
             else:  # theoretical
-                if not answer.user_answer.strip():  # Handle empty answers
+                if not answer.user_answer.strip():
                     partial_score = 0.0
                     feedback = "No answer provided."
                     is_correct = False
