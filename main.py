@@ -8,12 +8,6 @@ from pydantic import BaseModel
 from typing import List
 import json
 import re
-import base64
-from io import BytesIO
-from PIL import Image
-from docx import Document
-import tempfile
-import shutil
 
 load_dotenv()
 
@@ -46,10 +40,7 @@ class AnswerRequest(BaseModel):
 class GradeRequest(BaseModel):
     answers: List[AnswerRequest]
 
-# Temporary directory for storing images
-TEMP_DIR = tempfile.mkdtemp()
-
-@app.get("")
+@app.get("/")
 async def root():
     return {"message": "Welcome to the AI Study Companion Backend"}
 
@@ -57,56 +48,23 @@ async def root():
 async def extract_text(file: UploadFile = File(...)):
     try:
         file_extension = file.filename.lower().split('.')[-1]
-        images = []
+        text = ""
         
         if file_extension == 'pdf':
             with pdfplumber.open(file.file) as pdf:
-                text = ""
                 for page in pdf.pages:
                     text += page.extract_text() or ""
-                    # Extract images
-                    for img in page.images:
-                        img_data = img['stream'].get_data()
-                        img_io = BytesIO(img_data)
-                        img_pil = Image.open(img_io)
-                        img_buffer = BytesIO()
-                        img_pil.save(img_buffer, format="PNG")
-                        img_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-                        images.append({
-                            'figure': f"Figure {len(images) + 1}",
-                            'image': img_base64
-                        })
-        elif file_extension == 'docx':
-            temp_file = os.path.join(TEMP_DIR, file.filename)
-            with open(temp_file, 'wb') as f:
-                shutil.copyfileobj(file.file, f)
-            doc = Document(temp_file)
-            text = ""
-            for para in doc.paragraphs:
-                text += para.text + "\n"
-            # Extract images
-            for rel in doc.part.rels.values():
-                if "image" in rel.target_ref:
-                    img_data = rel.target_part.blob
-                    img_io = BytesIO(img_data)
-                    img_pil = Image.open(img_io)
-                    img_buffer = BytesIO()
-                    img_pil.save(img_buffer, format="PNG")
-                    img_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-                    images.append({
-                        'figure': f"Figure {len(images) + 1}",
-                        'image': img_base64
-                    })
-            os.remove(temp_file)
         elif file_extension == 'txt':
             text = await file.read()
             text = text.decode('utf-8')
+        elif file_extension == 'docx':
+            # Note: docx_to_text is handled client-side, but we can add server-side if needed
+            return {"error": "DOCX extraction must be handled client-side"}
         else:
-            return {"error": f"Unsupported file type: {file_extension}. Supported types: .pdf, .txt, .docx"}
+            return {"error": f"Unsupported file type: {file_extension}. Supported types: .pdf, .txt"}
         
         print(f"Extracted text length: {len(text)}")
-        print(f"Extracted {len(images)} images")
-        return {"text": text, "images": images}
+        return {"text": text}
     except Exception as e:
         print(f"Error in extract_text: {str(e)}")
         return {"error": str(e)}
@@ -121,7 +79,6 @@ async def generate_questions(request: QuestionRequest):
                 f"Generate exactly {num_questions} multiple-choice questions based on the following content:\n\n{request.text}\n\n"
                 f"Provide 4 answer options per question, with the correct answer marked with **, e.g., c) **Correct Option**. "
                 f"Ensure each question is numbered (e.g., Q1, Q2) and formatted clearly with a period after the question number (e.g., Q1.). "
-                f"If the content references figures (e.g., Figure 1), include a 'figure' field in the response to indicate the figure number. "
                 f"If the content is insufficient, generate relevant questions based on the topic to reach exactly {num_questions} questions."
             )
         else:  # theoretical
@@ -130,7 +87,6 @@ async def generate_questions(request: QuestionRequest):
                 f"For each question, provide a sample answer prefixed with 'Sample Answer:'. "
                 f"Format each question as: '**Q#: Question text**' and the sample answer as '**Sample Answer: Answer text**'. "
                 f"Ensure each question is numbered (e.g., Q1, Q2). "
-                f"If the content references figures (e.g., Figure 1), include a 'figure' field in the response to indicate the figure number. "
                 f"If the content is insufficient, generate relevant questions based on the topic to reach exactly {num_questions} questions."
             )
         headers = {
@@ -161,18 +117,12 @@ async def generate_questions(request: QuestionRequest):
                 question_text = lines[0].replace('Q', '', 1).lstrip('0123456789. ').replace('""', '').strip()
                 options = [line.strip().replace('**', '') for line in lines[1:5] if line.strip()]
                 correct_option = next((opt for opt in options if '**' in opt), options[0])
-                # Check for figure reference
-                figure_match = re.search(r'Figure\s+(\d+)', question_text)
-                figure = figure_match.group(1) if figure_match else None
-                question_data = {
+                parsed_questions.append({
                     'text': question_text,
                     'type': 'multiple_choice',
                     'options': options,
                     'correct_answer': correct_option.replace('**', '').strip()
-                }
-                if figure:
-                    question_data['figure'] = f"Figure {figure}"
-                parsed_questions.append(question_data)
+                })
         else:  # theoretical
             question_matches = re.findall(r'\*\*Q\d+:.*?\*\*\n.*?\n\*\*Sample Answer:.*?(?=\*\*Q\d+:|$)', questions, re.DOTALL)
             question_count = len(question_matches)
@@ -181,17 +131,11 @@ async def generate_questions(request: QuestionRequest):
                 lines = q.strip().split('\n')
                 question_text = lines[0].replace('**Q', '').lstrip('0123456789: ').replace('**', '').replace('""', '').strip()
                 sample_answer = lines[2].replace('**Sample Answer:', '').replace('""', '').strip()
-                # Check for figure reference
-                figure_match = re.search(r'Figure\s+(\d+)', question_text)
-                figure = figure_match.group(1) if figure_match else None
-                question_data = {
+                parsed_questions.append({
                     'text': question_text,
                     'type': 'theoretical',
                     'correct_answer': sample_answer
-                }
-                if figure:
-                    question_data['figure'] = f"Figure {figure}"
-                parsed_questions.append(question_data)
+                })
 
         print(f"Generated {question_count} questions out of {num_questions} requested")
         if question_count < num_questions:
@@ -283,8 +227,3 @@ async def grade_answer(request: GradeRequest):
     except Exception as e:
         print(f"Error in grade_answer: {str(e)}")
         return {"error": str(e)}
-
-# Cleanup temporary directory on shutdown
-@app.on_event("shutdown")
-def cleanup():
-    shutil.rmtree(TEMP_DIR, ignore_errors=True)
