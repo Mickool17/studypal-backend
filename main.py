@@ -10,11 +10,10 @@ import json
 import re
 import base64
 from io import BytesIO
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
 from docx import Document
 import tempfile
 import shutil
-import imghdr  # For image format detection
 
 load_dotenv()
 
@@ -50,7 +49,7 @@ class GradeRequest(BaseModel):
 # Temporary directory for storing images
 TEMP_DIR = tempfile.mkdtemp()
 
-@app.get("/")
+@app.get("")
 async def root():
     return {"message": "Welcome to the AI Study Companion Backend"}
 
@@ -67,28 +66,16 @@ async def extract_text(file: UploadFile = File(...)):
                     text += page.extract_text() or ""
                     # Extract images
                     for img in page.images:
-                        try:
-                            img_data = img['stream'].get_data()
-                            # Validate image format
-                            img_format = imghdr.what(None, h=img_data)
-                            if img_format not in ['png', 'jpeg', 'bmp', 'gif']:
-                                print(f"Skipping unsupported image format: {img_format}")
-                                continue
-                            img_io = BytesIO(img_data)
-                            img_pil = Image.open(img_io)
-                            img_buffer = BytesIO()
-                            img_pil.save(img_buffer, format="PNG")
-                            img_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-                            images.append({
-                                'figure': f"Figure {len(images) + 1}",
-                                'image': img_base64
-                            })
-                        except UnidentifiedImageError as e:
-                            print(f"Error processing PDF image: {str(e)}")
-                            continue
-                        except Exception as e:
-                            print(f"Unexpected error processing PDF image: {str(e)}")
-                            continue
+                        img_data = img['stream'].get_data()
+                        img_io = BytesIO(img_data)
+                        img_pil = Image.open(img_io)
+                        img_buffer = BytesIO()
+                        img_pil.save(img_buffer, format="PNG")
+                        img_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+                        images.append({
+                            'figure': f"Figure {len(images) + 1}",
+                            'image': img_base64
+                        })
         elif file_extension == 'docx':
             temp_file = os.path.join(TEMP_DIR, file.filename)
             with open(temp_file, 'wb') as f:
@@ -100,28 +87,16 @@ async def extract_text(file: UploadFile = File(...)):
             # Extract images
             for rel in doc.part.rels.values():
                 if "image" in rel.target_ref:
-                    try:
-                        img_data = rel.target_part.blob
-                        # Validate image format
-                        img_format = imghdr.what(None, h=img_data)
-                        if img_format not in ['png', 'jpeg', 'bmp', 'gif']:
-                            print(f"Skipping unsupported image format: {img_format}")
-                            continue
-                        img_io = BytesIO(img_data)
-                        img_pil = Image.open(img_io)
-                        img_buffer = BytesIO()
-                        img_pil.save(img_buffer, format="PNG")
-                        img_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-                        images.append({
-                            'figure': f"Figure {len(images) + 1}",
-                            'image': img_base64
-                        })
-                    except UnidentifiedImageError as e:
-                        print(f"Error processing DOCX image: {str(e)}")
-                        continue
-                    except Exception as e:
-                        print(f"Unexpected error processing DOCX image: {str(e)}")
-                        continue
+                    img_data = rel.target_part.blob
+                    img_io = BytesIO(img_data)
+                    img_pil = Image.open(img_io)
+                    img_buffer = BytesIO()
+                    img_pil.save(img_buffer, format="PNG")
+                    img_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+                    images.append({
+                        'figure': f"Figure {len(images) + 1}",
+                        'image': img_base64
+                    })
             os.remove(temp_file)
         elif file_extension == 'txt':
             text = await file.read()
@@ -134,7 +109,7 @@ async def extract_text(file: UploadFile = File(...)):
         return {"text": text, "images": images}
     except Exception as e:
         print(f"Error in extract_text: {str(e)}")
-        return {"error": str(e), "text": "", "images": []}
+        return {"error": str(e)}
 
 @app.post("/generate-questions")
 async def generate_questions(request: QuestionRequest):
@@ -186,6 +161,7 @@ async def generate_questions(request: QuestionRequest):
                 question_text = lines[0].replace('Q', '', 1).lstrip('0123456789. ').replace('""', '').strip()
                 options = [line.strip().replace('**', '') for line in lines[1:5] if line.strip()]
                 correct_option = next((opt for opt in options if '**' in opt), options[0])
+                # Check for figure reference
                 figure_match = re.search(r'Figure\s+(\d+)', question_text)
                 figure = figure_match.group(1) if figure_match else None
                 question_data = {
@@ -205,6 +181,7 @@ async def generate_questions(request: QuestionRequest):
                 lines = q.strip().split('\n')
                 question_text = lines[0].replace('**Q', '').lstrip('0123456789: ').replace('**', '').replace('""', '').strip()
                 sample_answer = lines[2].replace('**Sample Answer:', '').replace('""', '').strip()
+                # Check for figure reference
                 figure_match = re.search(r'Figure\s+(\d+)', question_text)
                 figure = figure_match.group(1) if figure_match else None
                 question_data = {
