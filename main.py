@@ -50,6 +50,8 @@ def preprocess_text(text: str) -> str:
     text = text.replace('–', '-').replace('’', "'")
     # Ensure proper spacing around punctuation
     text = re.sub(r'([.,;:!?])([a-zA-Z])', r'\1 \2', text)
+    # Remove stray quotation marks
+    text = re.sub(r'"+', '', text)
     # Trim leading/trailing whitespace
     text = text.strip()
     return text
@@ -107,8 +109,9 @@ async def generate_questions(request: QuestionRequest):
                 prompt = (
                     f"Generate exactly {num_questions} open-ended theoretical questions based on the following content:\n\n{request.text}\n\n"
                     f"For each question, provide a sample answer prefixed with 'Sample Answer:'. "
-                    f"Format each question as: '**Q#: Question text**' and the sample answer as '**Sample Answer: Answer text**'. "
+                    f"Format each question as: '**Q#: Question text**' and the sample answer as: '**Sample Answer: Answer text**'. "
                     f"Ensure each question is numbered (e.g., Q1, Q2). "
+                    f"Avoid including stray quotation marks (e.g., \"\") in the question text or sample answer. "
                     f"If the content is insufficient, generate relevant questions based on the topic to reach exactly {num_questions} questions."
                 )
             headers = {
@@ -175,8 +178,15 @@ async def generate_questions(request: QuestionRequest):
                 print(f"Attempt {attempt + 1} - Parsed {question_count} theoretical questions")
                 for q in question_matches:
                     lines = q.strip().split('\n')
-                    question_text = lines[0].replace('**Q', '').lstrip('0123456789: ').replace('""', '').strip()
+                    question_text = lines[0].replace('**Q', '').lstrip('0123456789: ').replace('**', '').replace('""', '').strip()
+                    # Additional sanitization for stray quotation marks
+                    question_text = re.sub(r'"+', '', question_text).strip()
                     sample_answer = lines[2].replace('**Sample Answer:', '').replace('""', '').strip()
+                    sample_answer = re.sub(r'"+', '', sample_answer).strip()
+                    # Validate non-empty question text
+                    if not question_text:
+                        print(f"Attempt {attempt + 1} - Warning: Empty question text for theoretical question, skipping")
+                        continue
                     parsed_questions.append({
                         'text': question_text,
                         'type': 'theoretical',
