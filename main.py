@@ -99,6 +99,7 @@ async def generate_questions(request: QuestionRequest):
                 prompt = (
                     f"Generate exactly {num_questions} multiple-choice questions based on the following content:\n\n{request.text}\n\n"
                     f"Provide 4 answer options per question, with the correct answer marked with **, e.g., c) **Correct Option**. "
+                    f"Ensure each option has non-empty text after the prefix (e.g., a), b)). "
                     f"Ensure each question is numbered (e.g., Q1, Q2) and formatted clearly with a period after the question number (e.g., Q1.). "
                     f"If the content is insufficient, generate relevant questions based on the topic to reach exactly {num_questions} questions."
                 )
@@ -144,10 +145,10 @@ async def generate_questions(request: QuestionRequest):
                         if line:
                             # Remove ** and "Correct Option" or similar text
                             clean_option = re.sub(r'\s*\*\*.*?(Correct Option)?\s*$', '', line).strip()
-                            # Ensure option starts with a letter (e.g., a), b))
-                            if re.match(r'^[a-d]\)\s*', clean_option):
+                            # Ensure option starts with a letter and has non-empty text
+                            if re.match(r'^[a-d]\)\s*\S+', clean_option):
                                 options.append(clean_option)
-                    # Validate exactly 4 options
+                    # Validate exactly 4 non-empty options
                     if len(options) != 4:
                         print(f"Attempt {attempt + 1} - Warning: Question '{question_text}' has {len(options)} options, expected 4: {options}")
                         continue
@@ -159,9 +160,9 @@ async def generate_questions(request: QuestionRequest):
                             if clean_correct in options:
                                 correct_option = clean_correct
                                 break
-                    if not correct_option:
-                        print(f"Attempt {attempt + 1} - Warning: No correct option found for question '{question_text}', defaulting to first option")
-                        correct_option = options[0]
+                    if not correct_option or not re.match(r'^[a-d]\)\s*\S+', correct_option):
+                        print(f"Attempt {attempt + 1} - Warning: Invalid or missing correct option for question '{question_text}', options: {options}")
+                        continue
                     parsed_questions.append({
                         'text': question_text,
                         'type': 'multiple_choice',
@@ -174,7 +175,7 @@ async def generate_questions(request: QuestionRequest):
                 print(f"Attempt {attempt + 1} - Parsed {question_count} theoretical questions")
                 for q in question_matches:
                     lines = q.strip().split('\n')
-                    question_text = lines[0].replace('**Q', '').lstrip('0123456789: ').replace('**', '').replace('""', '').strip()
+                    question_text = lines[0].replace('**Q', '').lstrip('0123456789: ').replace('""', '').strip()
                     sample_answer = lines[2].replace('**Sample Answer:', '').replace('""', '').strip()
                     parsed_questions.append({
                         'text': question_text,
@@ -186,10 +187,10 @@ async def generate_questions(request: QuestionRequest):
             if len(parsed_questions) >= num_questions:
                 break  # Exit if we have enough questions
             if attempt < max_attempts - 1:
-                print(f"Attempt {attempt + 1} - Retrying due to insufficient questions ({len(parsed_questions)} < {num_questions})")
+                print(f"Attempt {attempt + 1} - Retrying due to insufficient valid questions ({len(parsed_questions)} < {num_questions})")
 
         if len(parsed_questions) < num_questions:
-            print(f"Warning: Generated fewer questions ({len(parsed_questions)}) than requested ({num_questions}) after {max_attempts} attempts")
+            print(f"Warning: Generated fewer valid questions ({len(parsed_questions)}) than requested ({num_questions}) after {max_attempts} attempts")
 
         return {"questions": parsed_questions[:num_questions]}
     except Exception as e:
