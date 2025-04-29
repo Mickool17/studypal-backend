@@ -58,7 +58,6 @@ async def extract_text(file: UploadFile = File(...)):
             text = await file.read()
             text = text.decode('utf-8')
         elif file_extension == 'docx':
-            # Note: docx_to_text is handled client-side, but we can add server-side if needed
             return {"error": "DOCX extraction must be handled client-side"}
         else:
             return {"error": f"Unsupported file type: {file_extension}. Supported types: .pdf, .txt"}
@@ -115,13 +114,38 @@ async def generate_questions(request: QuestionRequest):
             for q in question_matches:
                 lines = q.strip().split('\n')
                 question_text = lines[0].replace('Q', '', 1).lstrip('0123456789. ').replace('""', '').strip()
-                options = [line.strip().replace('**', '') for line in lines[1:5] if line.strip()]
-                correct_option = next((opt for opt in options if '**' in opt), options[0])
+                # Extract options, removing markers and extra text
+                options = []
+                raw_options = lines[1:5] if len(lines) >= 5 else lines[1:]
+                for line in raw_options:
+                    line = line.strip()
+                    if line:
+                        # Remove ** and "Correct Option" or similar text
+                        clean_option = re.sub(r'\s*\*\*.*?(Correct Option)?\s*$', '', line).strip()
+                        # Ensure option starts with a letter (e.g., a), b))
+                        if re.match(r'^[a-d]\)\s*', clean_option):
+                            options.append(clean_option)
+                # Validate exactly 4 options
+                if len(options) != 4:
+                    print(f"Warning: Question '{question_text}' has {len(options)} options, expected 4: {options}")
+                    continue
+                # Find correct answer by matching the option with ** in raw text
+                correct_option = None
+                for line in raw_options:
+                    if '**' in line:
+                        # Extract the option text before **
+                        clean_correct = re.sub(r'\s*\*\*.*?(Correct Option)?\s*$', '', line).strip()
+                        if clean_correct in options:
+                            correct_option = clean_correct
+                            break
+                if not correct_option:
+                    print(f"Warning: No correct option found for question '{question_text}', defaulting to first option")
+                    correct_option = options[0]
                 parsed_questions.append({
                     'text': question_text,
                     'type': 'multiple_choice',
                     'options': options,
-                    'correct_answer': correct_option.replace('**', '').strip()
+                    'correct_answer': correct_option
                 })
         else:  # theoretical
             question_matches = re.findall(r'\*\*Q\d+:.*?\*\*\n.*?\n\*\*Sample Answer:.*?(?=\*\*Q\d+:|$)', questions, re.DOTALL)
