@@ -153,7 +153,7 @@ async def generate_questions(request: QuestionRequest):
             print(f"Parsed {question_count} theoretical questions")
             for q in question_matches:
                 lines = q.strip().split('\n')
-                question_text = lines[0].replace('**Q', '').lstrip('0123456789: ').replace('**', '').replace('""', '').strip()
+                question_text = lines[0].replace('**Q', '').lstrip('0123456789: ').replace('""', '').strip()
                 sample_answer = lines[2].replace('**Sample Answer:', '').replace('""', '').strip()
                 parsed_questions.append({
                     'text': question_text,
@@ -180,12 +180,20 @@ async def grade_answer(request: GradeRequest):
 
         for i, answer in enumerate(request.answers):
             print(f"Processing answer {i+1}: {answer.question}")
+            print(f"User answer: '{answer.user_answer}'")
+            print(f"Correct answer: '{answer.correct_answer}'")
             partial_score = 0.0
             feedback = ""
             if answer.question_type == "multiple_choice":
-                is_correct = answer.user_answer.strip() == answer.correct_answer.strip()
+                # Normalize answers: remove prefixes (e.g., a)), trim spaces, ignore case
+                user_answer = re.sub(r'^[a-d]\)\s*', '', answer.user_answer.strip()).lower()
+                correct_answer = re.sub(r'^[a-d]\)\s*', '', answer.correct_answer.strip()).lower()
+                is_correct = user_answer == correct_answer
                 partial_score = 1.0 if is_correct else 0.0
-                feedback = "Correct answer!" if is_correct else "Incorrect, please review the material."
+                feedback = "Correct answer!" if is_correct else f"Incorrect, the correct answer was: {answer.correct_answer}"
+                print(f"Normalized user answer: '{user_answer}'")
+                print(f"Normalized correct answer: '{correct_answer}'")
+                print(f"Is correct: {is_correct}")
             else:  # theoretical
                 if not answer.user_answer.strip():
                     partial_score = 0.0
